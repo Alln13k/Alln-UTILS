@@ -31,6 +31,8 @@ Démarre le bot :
 npm start
 ```
 
+Si ton hébergeur lance directement `node index.js`, un fichier `index.js` à la racine redirige vers `src/index.js`.
+
 Enregistre les slash commands sur la guilde :
 
 ```bash
