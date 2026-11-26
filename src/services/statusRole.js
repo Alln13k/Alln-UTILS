@@ -122,16 +122,19 @@ async function roleIsAssignable(client, guild, roleId) {
 async function applyRole(client, member, state, config) {
   if (!member || !config.roleId || !isEligible(member, config)) return;
 
-  const now = Date.now();
-  if (now - (memberCooldowns.get(member.id) ?? 0) < COOLDOWN_MS) return;
-
   const shouldHave = matches(state, config);
   const has = member.roles.cache.has(config.roleId);
   if (shouldHave === has) return;
 
   if (shouldHave && !(await roleIsAssignable(client, member.guild, config.roleId))) return;
 
-  memberCooldowns.set(member.id, now);
+  // Un retrait doit pouvoir suivre immédiatement une attribution : la clé du
+  // cooldown inclut donc l'état désiré.
+  const cooldownKey = `${member.id}:${shouldHave ? 1 : 0}`;
+  const now = Date.now();
+  if (now - (memberCooldowns.get(cooldownKey) ?? 0) < COOLDOWN_MS) return;
+
+  memberCooldowns.set(cooldownKey, now);
   const action = shouldHave ? 'grant' : 'revoke';
   const reason = shouldHave ? 'Statut personnalisé correspondant' : 'Statut personnalisé non correspondant';
 
@@ -151,7 +154,7 @@ async function applyRole(client, member, state, config) {
       });
     }
   } catch (err) {
-    memberCooldowns.delete(member.id);
+    memberCooldowns.delete(cooldownKey);
     lastError = `${action} ${member.id}: ${err.message}`;
     console.error(`[alln-utils] statusRole ${lastError}`);
     await log(client, 'statusrole', action, {
