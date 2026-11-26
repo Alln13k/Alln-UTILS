@@ -100,6 +100,27 @@ async function main() {
   if (commands.length !== 25) fail(`${commands.length} commandes (attendu 25)`);
   notes.push(`${commands.length} commandes chargées`);
 
+  const embedCommand = commands.find((command) => command.name === 'embed');
+  const embedOptions = embedCommand?.options ?? [];
+  if (embedOptions.find((option) => option.name === 'image')?.type !== 3) {
+    fail('/embed: option image (URL) manquante');
+  }
+  if (embedOptions.find((option) => option.name === 'fichier')?.type !== 11) {
+    fail('/embed: option fichier (attachment) manquante');
+  }
+  const { buildEmbed } = await import(pathToFileURL(join(SRC, 'embeds.js')).href);
+  const embedJson = buildEmbed({
+    dark: true,
+    title: 'test',
+    description: 'test',
+    image: 'https://example.com/image.png',
+  }).toJSON();
+  if (embedJson.image?.url !== 'https://example.com/image.png') {
+    fail('buildEmbed: image non présente dans l’embed');
+  } else {
+    notes.push('/embed image (URL + fichier joint) disponible');
+  }
+
   validatePayload('config.main', renderer.buildConfigMainMenu());
   for (const category of registry.CONFIG_CATEGORIES) {
     validatePayload(`config.category.${category.id}`, renderer.buildConfigCategory(category.id));
