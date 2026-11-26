@@ -1,5 +1,6 @@
+import { PermissionFlagsBits } from 'discord.js';
+import { addWarning, getWordlist } from '../db.js';
 import { getConfig } from '../config.js';
-import { addWarn, getLevelUser, getWordlist } from '../db.js';
 import { log } from '../logger.js';
 import { isStaff } from '../permissions.js';
 import { applyWarnThresholds } from '../warnSystem.js';
@@ -10,14 +11,27 @@ const MUTE_MS = 10 * 60 * 1000;
 
 const spamTracker = new Map();
 
+function settings() {
+  const value = getConfig().automodSettings ?? {};
+  return {
+    spam: { count: 5, window: 10, ...(value.spam ?? {}) },
+    caps: { percent: 70, minLength: 10, ...(value.caps ?? {}) },
+    mentions: { max: 5, ...(value.mentions ?? {}) },
+    links: { minLevel: 0, ...(value.links ?? {}) },
+    invites: { enabled: true, ...(value.invites ?? {}) },
+    wordlist: { enabled: true, ...(value.wordlist ?? {}) },
+  };
+}
+
 function isImmune(member, config) {
   if (!member) return true;
   if (isStaff(member)) return true;
+  if (member.permissions?.has(PermissionFlagsBits.Administrator)) return true;
   return (config.automodImmuneRoles ?? []).some((roleId) => member.roles.cache.has(roleId));
 }
 
 async function warnMember(client, member, reason) {
-  addWarn(member.id, { moderator: 'automod', reason, type: 'automod' });
+  addWarning(member.id, 'automod', reason);
   await applyWarnThresholds(client, member.guild, member, { reason });
 }
 
@@ -35,47 +49,49 @@ async function removeAndLog(client, message, type, extraFields = []) {
 }
 
 export async function handleAutomod(client, message) {
-  if (!message.guild || message.author?.bot) return false;
+  if (!message.guild || message.author?.bot || message.system) return false;
 
   const config = getConfig();
-  if (!config.automodEnabled) return false;
+  const rules = settings();
 
   const member = message.member
     ?? (await message.guild.members.fetch(message.author.id).catch(() => null));
-  if (!member) return false;
-  if (isImmune(member, config)) return false;
+  if (!member || isImmune(member, config)) return false;
 
   const content = message.content ?? '';
 
-  if (INVITE_PATTERN.test(content)) {
-    await removeAndLog(client, message, 'invites', [{ name: 'Règle', value: 'Invitation Discord', inline: true }]);
+  if (rules.invites.enabled && INVITE_PATTERN.test(content)) {
+    await removeAndLog(client, message, 'invites', [
+      { name: 'Règle', value: 'Invitation Discord', inline: true },
+    ]);
     return true;
   }
 
   if (LINK_PATTERN.test(content)) {
-    const level = Math.floor(getLevelUser(member.id).xp / 100);
-    if (level < (Number(config.automodLinkMinLevel) || 0)) {
+    const level = rules.links.minLevel;
+    if (level > 0) {
       await removeAndLog(client, message, 'links', [
-        { name: 'Règle', value: `Lien sous niveau ${config.automodLinkMinLevel}`, inline: true },
-        { name: 'Niveau', value: String(level), inline: true },
+        { name: 'Règle', value: `Lien interdit sous le niveau ${level}`, inline: true },
       ]);
       await warnMember(client, member, 'Lien externe sous le niveau requis');
       return true;
     }
   }
 
-  const words = getWordlist();
-  if (words.length > 0) {
-    const lower = content.toLowerCase();
-    const found = words.find((word) => lower.includes(word.toLowerCase()));
+  if (rules.wordlist.enabled) {
+    const words = getWordlist();
+    const found = words.find((word) => content.toLowerCase().includes(String(word).toLowerCase()));
     if (found) {
-      await removeAndLog(client, message, 'wordlist', [{ name: 'Mot', value: found.slice(0, 100), inline: true }]);
+      await removeAndLog(client, message, 'wordlist', [
+        { name: 'Mot', value: String(found).slice(0, 100), inline: true },
+      ]);
+      await warnMember(client, member, 'Mot interdit');
       return true;
     }
   }
 
   const mentions = (message.mentions?.users?.size ?? 0) + (message.mentions?.roles?.size ?? 0);
-  if (mentions > (Number(config.automodMentionsMax) || 5)) {
+  if (mentions > Math.max(1, Number(rules.mentions.max) || 5)) {
     await removeAndLog(client, message, 'mentions', [
       { name: 'Mentions', value: String(mentions), inline: true },
       { name: 'Action', value: 'timeout 10 minutes', inline: true },
@@ -85,10 +101,10 @@ export async function handleAutomod(client, message) {
   }
 
   const letters = content.replace(/[^a-zA-Z]/g, '');
-  if (letters.length >= (Number(config.automodCapsMinLength) || 10)) {
+  if (letters.length >= Math.max(1, Number(rules.caps.minLength) || 10)) {
     const uppercase = letters.replace(/[^A-Z]/g, '').length;
     const percent = Math.round((uppercase / letters.length) * 100);
-    if (percent > (Number(config.automodCapsPercent) || 70)) {
+    if (percent > Math.max(1, Number(rules.caps.percent) || 70)) {
       await removeAndLog(client, message, 'caps', [
         { name: 'Majuscules', value: `${percent}%`, inline: true },
         { name: 'Action', value: 'warn', inline: true },
@@ -99,8 +115,8 @@ export async function handleAutomod(client, message) {
   }
 
   const now = Date.now();
-  const windowMs = Math.max(2, Number(config.automodSpamWindow) || 10) * 1000;
-  const limit = Math.max(2, Number(config.automodSpamCount) || 5);
+  const windowMs = Math.max(2, Number(rules.spam.window) || 10) * 1000;
+  const limit = Math.max(2, Number(rules.spam.count) || 5);
   const history = (spamTracker.get(member.id) ?? []).filter((timestamp) => now - timestamp <= windowMs);
   history.push(now);
   spamTracker.set(member.id, history);

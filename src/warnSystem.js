@@ -4,22 +4,24 @@ import { log } from './logger.js';
 
 const MUTE_DURATION_MS = 60 * 60 * 1000;
 
-export function nextWarnThreshold(count) {
+function thresholds() {
   const config = getConfig();
-  const thresholds = [
-    { action: 'mute', at: Number(config.warnMuteAt) || 3 },
-    { action: 'kick', at: Number(config.warnKickAt) || 5 },
-    { action: 'ban', at: Number(config.warnBanAt) || 7 },
-  ].filter((entry) => entry.at > count).sort((a, b) => a.at - b.at);
-
-  return thresholds[0] ?? null;
+  const values = config.warnThresholds ?? {};
+  return {
+    mute: Math.max(1, Number(values.mute) || 3),
+    kick: Math.max(1, Number(values.kick) || 5),
+    ban: Math.max(1, Number(values.ban) || 7),
+  };
 }
 
 export async function applyWarnThresholds(client, guild, member, { moderator = null, reason = 'Seuil de warns atteint' } = {}) {
-  const config = getConfig();
-  const count = countWarns(member.id);
+  if (!member?.id) return { action: null, count: 0 };
 
-  if (count === (Number(config.warnMuteAt) || 3)) {
+  const config = thresholds();
+  const count = countWarns(member.id);
+  const by = moderator ? `<@${moderator}>` : 'automod';
+
+  if (count === config.mute) {
     await member.timeout(MUTE_DURATION_MS, `Warns — ${reason}`).catch(() => null);
     await log(client, 'moderation', 'mute', {
       guild,
@@ -28,13 +30,13 @@ export async function applyWarnThresholds(client, guild, member, { moderator = n
         { name: 'Cible', value: `<@${member.id}> (${member.user.tag})`, inline: true },
         { name: 'Warns', value: String(count), inline: true },
         { name: 'Durée', value: '1 heure', inline: true },
-        { name: 'Déclencheur', value: moderator ? `<@${moderator}>` : 'automod', inline: true },
+        { name: 'Déclencheur', value: by, inline: true },
       ],
     });
     return { action: 'mute', count };
   }
 
-  if (count === (Number(config.warnKickAt) || 5)) {
+  if (count === config.kick) {
     if (member.kickable) {
       await member.kick(`Warns — ${reason}`).catch(() => null);
       await log(client, 'moderation', 'kick', {
@@ -43,14 +45,15 @@ export async function applyWarnThresholds(client, guild, member, { moderator = n
         fields: [
           { name: 'Cible', value: `<@${member.id}> (${member.user.tag})`, inline: true },
           { name: 'Warns', value: String(count), inline: true },
-          { name: 'Déclencheur', value: moderator ? `<@${moderator}>` : 'automod', inline: true },
+          { name: 'Déclencheur', value: by, inline: true },
         ],
       });
+      return { action: 'kick', count };
     }
-    return { action: 'kick', count };
+    return { action: 'kick-denied', count };
   }
 
-  if (count === (Number(config.warnBanAt) || 7)) {
+  if (count === config.ban) {
     await guild.members.ban(member.id, { reason: `Warns — ${reason}` }).catch(() => null);
     await log(client, 'moderation', 'ban', {
       guild,
@@ -58,7 +61,7 @@ export async function applyWarnThresholds(client, guild, member, { moderator = n
       fields: [
         { name: 'Cible', value: `<@${member.id}> (${member.user.tag})`, inline: true },
         { name: 'Warns', value: String(count), inline: true },
-        { name: 'Déclencheur', value: moderator ? `<@${moderator}>` : 'automod', inline: true },
+        { name: 'Déclencheur', value: by, inline: true },
       ],
     });
     return { action: 'ban', count };

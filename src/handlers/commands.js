@@ -1,25 +1,13 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const COMMANDS_DIR = path.join(HERE, '..', 'commands');
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 export async function loadCommands(client) {
-  const files = fs.readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.js'));
-  client.commands.clear();
-
-  for (const file of files) {
-    const mod = await import(pathToFileURL(path.join(COMMANDS_DIR, file)).href);
+  const commandsDir = join(process.cwd(), 'src', 'commands');
+  for (const file of readdirSync(commandsDir).filter((f) => f.endsWith('.js'))) {
+    const mod = await import(`file:///${join(commandsDir, file).replace(/\\/g, '/')}`);
     const command = mod.default;
-
-    if (!command?.data || typeof command.execute !== 'function') {
-      console.warn(`[alln-utils] commande ignorée (format invalide): ${file}`);
-      continue;
+    if (command && command.data && typeof command.execute === 'function') {
+      client.commands.set(command.data.name, command);
     }
-
-    client.commands.set(command.data.name, command);
   }
-
-  console.log(`[alln-utils] ${client.commands.size} commande(s) chargée(s)`);
 }

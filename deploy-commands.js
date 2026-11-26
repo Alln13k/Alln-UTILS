@@ -1,42 +1,32 @@
-import 'dotenv/config';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { REST, Routes } from 'discord.js';
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import dotenv from 'dotenv';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const COMMANDS_DIR = path.join(HERE, 'src', 'commands');
+dotenv.config();
 
-const token = process.env.DISCORD_TOKEN;
-const clientId = process.env.CLIENT_ID;
-const guildId = process.env.GUILD_ID;
+const TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
 
-if (!token || !clientId || !guildId) {
-  console.error('[alln-utils] DISCORD_TOKEN, CLIENT_ID et GUILD_ID doivent être définis dans .env');
+if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
+  console.error('[alln-utils] DISCORD_TOKEN, CLIENT_ID et GUILD_ID requis dans .env');
   process.exit(1);
 }
 
-const files = fs.readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.js'));
-const body = [];
+const commands = [];
+const commandsDir = join(process.cwd(), 'src', 'commands');
 
-for (const file of files) {
-  const mod = await import(pathToFileURL(path.join(COMMANDS_DIR, file)).href);
+for (const file of readdirSync(commandsDir).filter((f) => f.endsWith('.js'))) {
+  const mod = await import(`file:///${join(commandsDir, file).replace(/\\/g, '/')}`);
   const command = mod.default;
-
-  if (!command?.data) {
-    console.warn(`[alln-utils] ignoré: ${file}`);
-    continue;
+  if (command && command.data) {
+    commands.push(command.data.toJSON());
   }
-
-  body.push(command.data.toJSON());
 }
 
-const rest = new REST({ version: '10' }).setToken(token);
+const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-try {
-  const data = await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
-  console.log(`[alln-utils] ${data.length} commande(s) enregistrée(s) sur la guilde ${guildId}`);
-} catch (err) {
-  console.error(`[alln-utils] déploiement échoué: ${err.message}`);
-  process.exit(1);
-}
+rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands })
+  .then(() => console.log(`[alln-utils] ${commands.length} commande(s) enregistrée(s) sur la guilde ${GUILD_ID}`))
+  .catch((err) => console.error('[alln-utils] deploy error:', err));

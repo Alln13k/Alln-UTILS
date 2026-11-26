@@ -1,7 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { buildEmbed } from './embeds.js';
 
-const STATUS_LABEL = {
+const STATUS_LABELS = {
   pending: '⏳ En attente',
   accepted: '✅ Acceptée',
   denied: '❌ Refusée',
@@ -16,9 +16,9 @@ export function buildSuggestionEmbed(suggestion) {
   return buildEmbed({
     dark: true,
     title: `💡 Suggestion #${suggestion.id}`,
-    description: suggestion.text,
+    description: String(suggestion.text ?? '').slice(0, 4000),
     fields: [
-      { name: 'Statut', value: STATUS_LABEL[suggestion.status] ?? suggestion.status, inline: true },
+      { name: 'Statut', value: STATUS_LABELS[suggestion.status] ?? suggestion.status, inline: true },
       { name: 'Auteur', value: `<@${suggestion.userId}>`, inline: true },
       { name: 'Votes', value: `👍 ${up} — 👎 ${down} (${ratio}% positif)`, inline: false },
     ],
@@ -26,25 +26,21 @@ export function buildSuggestionEmbed(suggestion) {
 }
 
 export function buildSuggestionRow(suggestion) {
+  const disabled = suggestion.status !== 'pending';
+
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`suggest_vote:up:${suggestion.id}`)
       .setLabel(String(suggestion.votes?.up?.length ?? 0))
       .setEmoji('👍')
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(Boolean(suggestion.status && suggestion.status !== 'pending')),
+      .setDisabled(disabled),
     new ButtonBuilder()
       .setCustomId(`suggest_vote:down:${suggestion.id}`)
       .setLabel(String(suggestion.votes?.down?.length ?? 0))
       .setEmoji('👎')
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(Boolean(suggestion.status && suggestion.status !== 'pending')),
-    new ButtonBuilder()
-      .setCustomId(`suggest_comment:${suggestion.id}`)
-      .setLabel('Commenter')
-      .setEmoji('💬')
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(Boolean(suggestion.status && suggestion.status !== 'pending')),
+      .setDisabled(disabled),
   );
 }
 

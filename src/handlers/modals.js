@@ -4,83 +4,68 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 import { getConfig } from '../config.js';
+import { buildEmbed } from '../embeds.js';
+import { log } from '../logger.js';
+import { isTicketStaff } from '../permissions.js';
+import { safeDefer, safeError, safeReply } from '../respond.js';
 import {
   countOpenTicketsFor,
-  getSuggestion,
   getTicketByChannel,
   nextTicketId,
   saveTicket,
   updateTicket,
 } from '../db.js';
-import { buildEmbed } from '../embeds.js';
-import { handleWizardModal } from '../configWizard.js';
-import { log } from '../logger.js';
-import { isTicketStaff, replyError } from '../permissions.js';
 import { buildTicketEmbed, buildTicketRow } from '../ticketUi.js';
+import { parseUserId, sanitizeName } from '../ticketForms.js';
+import { handleConfigModal } from '../systems/config/ConfigInteractionHandler.js';
 
-function sanitizeName(value) {
-  return String(value)
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9-_]/g, '')
-    .slice(0, 20) || 'user';
-}
+const EPHEMERAL = { flags: MessageFlags.Ephemeral };
 
 export async function handleModal(interaction) {
-  if (interaction.customId.startsWith('ticket_modal:')) return createTicket(interaction);
-  if (interaction.customId.startsWith('ticket_form_modal:')) return createTicketFromForm(interaction);
-  if (interaction.customId === 'ticket_rename_modal') return renameTicket(interaction);
-  if (interaction.customId.startsWith('suggest_comment_modal:')) return commentSuggestion(interaction);
-  if (interaction.customId.startsWith('cfgw_modal:')) return handleWizardModal(interaction);
-  return null;
+  const customId = interaction.customId;
+
+  if (customId.startsWith('config:modal:')) return handleConfigModal(interaction);
+
+  if (customId === 'ticket_rename_modal') return renameTicket(interaction);
+  if (customId === 'ticket_add_modal') return addUserToTicket(interaction);
+  if (customId === 'ticket_remove_modal') return removeUserFromTicket(interaction);
+  if (customId.startsWith('ticket_modal:')) return createTicket(interaction);
+
+  return false;
 }
 
-async function createTicketFromForm(interaction) {
+async function createTicket(interaction) {
   const category = interaction.customId.split(':')[1] ?? 'autre';
-  const questions = getConfig().ticketForms?.[category] ?? [];
-  const answers = questions.slice(0, 5).map((question, index) => {
-    try {
-      return interaction.fields.getTextInputValue(`tq_${index}`).trim();
-    } catch {
-      return '';
-    }
-  });
 
-  const subject = answers[0]?.slice(0, 120) || `Ticket — ${category}`;
-  const description = answers
-    .map((answer, index) => (answer ? `**${questions[index]}**\n${answer}` : ''))
-    .filter(Boolean)
-    .join('\n\n')
-    .slice(0, 1000) || 'Aucune réponse fournie.';
-
-  return createTicket(interaction, { subject, description });
-}
-
-async function createTicket(interaction, overrides = {}) {
+  let subject;
+  let description;
   try {
-    const category = interaction.customId.split(':')[1] ?? 'autre';
-    const subject = overrides.subject ?? interaction.fields.getTextInputValue('ticket_subject').trim();
-    const description = overrides.description ?? interaction.fields.getTextInputValue('ticket_description').trim();
+    subject = interaction.fields.getTextInputValue('ticket_subject').trim();
+    description = interaction.fields.getTextInputValue('ticket_description').trim();
+  } catch {
+    return safeError(interaction, 'Formulaire incomplet.');
+  }
 
-    const config = getConfig();
-    const guild = interaction.guild;
-    const member = interaction.member;
+  const config = getConfig();
+  const guild = interaction.guild;
+  const member = interaction.member;
 
-    if (!config.ticketCategoryId) {
-      return replyError(interaction, 'Aucune catégorie de tickets configurée. `/config set ticketCategoryId #catégorie`.');
-    }
+  if (!config.ticketCategoryId) return safeError(interaction, 'Aucune catégorie de tickets configurée.');
+  if (!subject) return safeError(interaction, 'Le sujet ne peut pas être vide.');
 
-    const parent = await guild.channels.fetch(config.ticketCategoryId).catch(() => null);
-    if (!parent || parent.type !== ChannelType.GuildCategory) {
-      return replyError(interaction, 'La catégorie de tickets configurée est invalide.');
-    }
+  const parent = await guild.channels.fetch(config.ticketCategoryId).catch(() => null);
+  if (!parent || parent.type !== ChannelType.GuildCategory) {
+    return safeError(interaction, 'La catégorie de tickets configurée est invalide.');
+  }
 
-    const open = countOpenTicketsFor(member.id);
-    if (open >= config.ticketLimitPerUser) {
-      return replyError(interaction, `Limite atteinte : ${open}/${config.ticketLimitPerUser} ticket(s) ouvert(s).`);
-    }
+  const open = countOpenTicketsFor(member.id);
+  if (open >= config.ticketLimitPerUser) {
+    return safeError(interaction, `Limite atteinte : ${open}/${config.ticketLimitPerUser} ticket(s) ouvert(s).`);
+  }
 
+  if (!(await safeDefer(interaction, EPHEMERAL))) return true;
+
+  try {
     const id = nextTicketId();
     const name = `ticket-${sanitizeName(member.user.username)}-${id}`;
 
@@ -155,9 +140,8 @@ async function createTicket(interaction, overrides = {}) {
     const panel = await channel.send({
       content: `<@${member.id}>${config.ticketStaffRoleId ? ` <@&${config.ticketStaffRoleId}>` : ''}`,
       embeds: [buildTicketEmbed(ticket)],
-      components: [buildTicketRow()],
+      components: [buildTicketRow(ticket)],
     });
-
     updateTicket(channel.id, { panelMessageId: panel.id });
 
     await log(interaction.client, 'tickets', 'open', {
@@ -170,28 +154,32 @@ async function createTicket(interaction, overrides = {}) {
       ],
     });
 
-    return interaction.reply({
+    return safeReply(interaction, {
       embeds: [buildEmbed({ dark: true, title: 'Ticket ouvert', description: `Ton ticket est prêt : <#${channel.id}>` })],
-      flags: MessageFlags.Ephemeral,
     });
   } catch (err) {
     console.error(`[alln-utils] création ticket: ${err.stack ?? err.message}`);
-    return replyError(interaction, 'Création du ticket impossible. Vérifie les permissions du bot.');
+    return safeReply(interaction, {
+      embeds: [buildEmbed({ dark: true, title: 'Échec', description: 'Création du ticket impossible. Vérifie les permissions du bot.' })],
+    });
   }
 }
 
 async function renameTicket(interaction) {
+  const ticket = getTicketByChannel(interaction.channelId);
+  if (!ticket) return safeError(interaction, 'Ce salon n’est pas un ticket enregistré.');
+  if (!isTicketStaff(interaction.member) && interaction.user.id !== ticket.userId) {
+    return safeError(interaction, 'Seul l’auteur du ticket ou le staff peut le renommer.');
+  }
+
+  const raw = interaction.fields.getTextInputValue('ticket_new_name').trim();
+  const slug = sanitizeName(raw.replace(/\s+/g, '-'));
+  if (!slug) return safeError(interaction, 'Nom invalide.');
+  const newName = `ticket-${slug}-${ticket.id}`.slice(0, 100);
+
+  if (!(await safeDefer(interaction, EPHEMERAL))) return true;
+
   try {
-    const ticket = getTicketByChannel(interaction.channelId);
-    if (!ticket) return replyError(interaction, 'Ce salon n\'est pas un ticket enregistré.');
-    if (!isTicketStaff(interaction.member) && interaction.user.id !== ticket.userId) {
-      return replyError(interaction, 'Seul l\'auteur du ticket ou le staff peut le renommer.');
-    }
-
-    const raw = interaction.fields.getTextInputValue('ticket_new_name').trim();
-    const slug = sanitizeName(raw.replace(/\s+/g, '-'));
-    const newName = `ticket-${slug}-${ticket.id}`.slice(0, 100);
-
     await interaction.channel.setName(newName, `Renommé par ${interaction.user.tag}`);
     updateTicket(interaction.channelId, { customName: newName });
 
@@ -204,47 +192,86 @@ async function renameTicket(interaction) {
       ],
     });
 
-    return interaction.reply({
+    return safeReply(interaction, {
       embeds: [buildEmbed({ dark: true, title: 'Ticket renommé', description: `Le salon s'appelle maintenant **${newName}**.` })],
-      flags: MessageFlags.Ephemeral,
     });
   } catch (err) {
     console.error(`[alln-utils] rename ticket: ${err.stack ?? err.message}`);
-    return replyError(interaction, 'Renommage impossible.');
+    return safeReply(interaction, {
+      embeds: [buildEmbed({ dark: true, title: 'Échec', description: 'Renommage impossible.' })],
+    });
   }
 }
 
-async function commentSuggestion(interaction) {
+async function addUserToTicket(interaction) {
+  const ticket = getTicketByChannel(interaction.channelId);
+  if (!ticket) return safeError(interaction, 'Ce salon n’est pas un ticket.');
+  if (!isTicketStaff(interaction.member)) return safeError(interaction, 'Réservé au staff.');
+
+  const id = parseUserId(interaction.fields.getTextInputValue('ticket_add_user'));
+  if (!id) return safeError(interaction, 'Identifiant utilisateur invalide.');
+  if ((ticket.addedUsers ?? []).includes(id)) return safeError(interaction, 'Cet utilisateur est déjà dans le ticket.');
+
+  if (!(await safeDefer(interaction, EPHEMERAL))) return true;
+
   try {
-    const id = Number.parseInt(interaction.customId.split(':')[1], 10);
-    const suggestion = getSuggestion(id);
-    if (!suggestion) return replyError(interaction, 'Suggestion introuvable.');
+    await interaction.channel.permissionOverwrites.create(id, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true,
+    });
+    updateTicket(interaction.channelId, { addedUsers: [...(ticket.addedUsers ?? []), id] });
 
-    const text = interaction.fields.getTextInputValue('suggest_comment_text').trim();
-    const config = getConfig();
-    const channel = interaction.guild.channels.cache.get(config.suggestionsChannelId)
-      ?? (await interaction.guild.channels.fetch(config.suggestionsChannelId).catch(() => null));
-
-    if (!channel?.isTextBased()) return replyError(interaction, 'Salon de suggestions introuvable.');
-
-    await channel.send({
-      embeds: [buildEmbed({
-        dark: true,
-        title: `💬 Commentaire — suggestion #${id}`,
-        description: text,
-        fields: [
-          { name: 'Auteur', value: `<@${interaction.user.id}>`, inline: true },
-          { name: 'Suggestion', value: suggestion.text.slice(0, 500), inline: false },
-        ],
-      })],
+    await log(interaction.client, 'tickets', 'addUser', {
+      guild: interaction.guild,
+      fields: [
+        { name: 'Ticket', value: `#${ticket.id}`, inline: true },
+        { name: 'Utilisateur', value: `<@${id}>`, inline: true },
+        { name: 'Par', value: `<@${interaction.user.id}>`, inline: true },
+      ],
     });
 
-    return interaction.reply({
-      embeds: [buildEmbed({ dark: true, title: 'Commentaire envoyé', description: 'Ton commentaire a été publié.' })],
-      flags: MessageFlags.Ephemeral,
+    return safeReply(interaction, {
+      embeds: [buildEmbed({ dark: true, title: 'Utilisateur ajouté', description: `<@${id}> a été ajouté au ticket.` })],
     });
   } catch (err) {
-    console.error(`[alln-utils] suggest comment: ${err.message}`);
-    return replyError(interaction, 'Commentaire impossible.');
+    console.error(`[alln-utils] ticket add user: ${err.message}`);
+    return safeReply(interaction, {
+      embeds: [buildEmbed({ dark: true, title: 'Échec', description: 'Impossible d’ajouter l’utilisateur.' })],
+    });
+  }
+}
+
+async function removeUserFromTicket(interaction) {
+  const ticket = getTicketByChannel(interaction.channelId);
+  if (!ticket) return safeError(interaction, 'Ce salon n’est pas un ticket.');
+  if (!isTicketStaff(interaction.member)) return safeError(interaction, 'Réservé au staff.');
+
+  const id = parseUserId(interaction.fields.getTextInputValue('ticket_remove_user'));
+  if (!id) return safeError(interaction, 'Identifiant utilisateur invalide.');
+
+  if (!(await safeDefer(interaction, EPHEMERAL))) return true;
+
+  try {
+    await interaction.channel.permissionOverwrites.delete(id);
+    updateTicket(interaction.channelId, { addedUsers: (ticket.addedUsers ?? []).filter((u) => u !== id) });
+
+    await log(interaction.client, 'tickets', 'removeUser', {
+      guild: interaction.guild,
+      fields: [
+        { name: 'Ticket', value: `#${ticket.id}`, inline: true },
+        { name: 'Utilisateur', value: `<@${id}>`, inline: true },
+        { name: 'Par', value: `<@${interaction.user.id}>`, inline: true },
+      ],
+    });
+
+    return safeReply(interaction, {
+      embeds: [buildEmbed({ dark: true, title: 'Utilisateur retiré', description: `<@${id}> a été retiré du ticket.` })],
+    });
+  } catch (err) {
+    console.error(`[alln-utils] ticket remove user: ${err.message}`);
+    return safeReply(interaction, {
+      embeds: [buildEmbed({ dark: true, title: 'Échec', description: 'Impossible de retirer l’utilisateur.' })],
+    });
   }
 }

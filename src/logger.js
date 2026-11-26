@@ -5,7 +5,7 @@ import { readStore } from './store.js';
 
 function mergeEvents(base, patch) {
   const out = {};
-  const categories = new Set([...Object.keys(base), ...Object.keys(patch ?? {})]);
+  const categories = new Set([...Object.keys(base ?? {}), ...Object.keys(patch ?? {})]);
   for (const category of categories) {
     out[category] = { ...(base[category] ?? {}), ...(patch?.[category] ?? {}) };
   }
@@ -123,8 +123,6 @@ export async function log(client, category, event, payload = {}) {
     if (!guild) return null;
 
     const config = getConfig();
-    if (payload.channelId && (config.logExcludedChannels ?? []).includes(payload.channelId)) return null;
-
     const channelId = payload.channelIdOverride ?? resolveChannelId(category, event);
     if (!channelId || channelId === config.raidTrapChannelId) return null;
 

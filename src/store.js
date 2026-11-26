@@ -18,12 +18,12 @@ export function readStore(name, fallback) {
   const file = dataPath(name);
   try {
     if (!fs.existsSync(file)) {
-      writeStore(name, fallback);
+      fs.writeFileSync(file, JSON.stringify(fallback, null, 2), 'utf8');
       return structuredClone(fallback);
     }
     const raw = fs.readFileSync(file, 'utf8').trim();
     if (!raw) {
-      writeStore(name, fallback);
+      fs.writeFileSync(file, JSON.stringify(fallback, null, 2), 'utf8');
       return structuredClone(fallback);
     }
     return JSON.parse(raw);

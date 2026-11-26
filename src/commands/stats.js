@@ -1,69 +1,42 @@
-import { MessageFlags, SlashCommandBuilder } from 'discord.js';
-import { averageNote, getStats, listPremium, listTickets, listTools, totalVouchs } from '../db.js';
+import {
+  MessageFlags,
+  SlashCommandBuilder,
+} from 'discord.js';
 import { buildEmbed } from '../embeds.js';
-import { fail, requireStaff } from '../permissions.js';
 
 export default {
-  category: 'Utilitaires',
-  description: 'Statistiques complètes du serveur',
+  category: 'Utilitaire',
+  description: 'Affiche les statistiques du serveur',
   data: new SlashCommandBuilder()
     .setName('stats')
-    .setDescription('Statistiques complètes du serveur')
+    .setDescription('Affiche les statistiques du serveur')
     .setDMPermission(false),
 
   async execute(interaction) {
-    try {
-      if (!(await requireStaff(interaction))) return;
+    const guild = interaction.guild;
+    const members = guild.members.cache;
+    const humans = members.filter((m) => !m.user.bot).size;
+    const bots = members.filter((m) => m.user.bot).size;
+    const online = members.filter((m) => m.presence?.status === 'online').size;
+    const idle = members.filter((m) => m.presence?.status === 'idle').size;
+    const dnd = members.filter((m) => m.presence?.status === 'dnd').size;
 
-      const stats = getStats();
-      const tools = listTools();
-      const tickets = listTickets();
-      const open = tickets.filter((t) => t.status !== 'closed').length;
-      const closed = tickets.filter((t) => t.status === 'closed').length;
-      const activePremium = listPremium().filter((entry) => new Date(entry.expiresAt).getTime() > Date.now()).length;
-
-      const byCategory = new Map();
-      for (const tool of tools) {
-        byCategory.set(tool.category, (byCategory.get(tool.category) ?? 0) + 1);
-      }
-
-      const top = tools
-        .map((tool) => ({ name: tool.name, avg: averageNote(tool.slug) }))
-        .filter((entry) => entry.avg !== null)
-        .sort((a, b) => b.avg - a.avg)
-        .slice(0, 5);
-
-      return interaction.reply({
-        embeds: [buildEmbed({
-          dark: true,
-          title: 'Alln UTILS — Statistiques',
-          fields: [
-            { name: 'Leaks publiés', value: String(stats.leaksPublished ?? 0), inline: true },
-            { name: 'Tools', value: String(tools.length), inline: true },
-            { name: 'Vouchs', value: String(totalVouchs()), inline: true },
-            { name: 'Tickets ouverts', value: String(open), inline: true },
-            { name: 'Tickets fermés', value: String(closed), inline: true },
-            { name: 'Premiums actifs', value: String(activePremium), inline: true },
-            {
-              name: 'Tools par catégorie',
-              value: byCategory.size
-                ? [...byCategory.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([category, count]) => `${category} : ${count}`).join('\n')
-                : 'aucune tool',
-              inline: false,
-            },
-            {
-              name: 'Top 5 tools',
-              value: top.length
-                ? top.map((entry, index) => `${index + 1}. **${entry.name}** — ${entry.avg}/5`).join('\n')
-                : 'aucun vouch enregistré',
-              inline: false,
-            },
-          ],
-        })],
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (err) {
-      return fail(interaction, err, 'Statistiques indisponibles.', '/stats');
-    }
+    return interaction.reply({
+      embeds: [buildEmbed({
+        dark: true,
+        title: `Statistiques — ${guild.name}`,
+        fields: [
+          { name: 'Membres', value: String(guild.memberCount), inline: true },
+          { name: 'Humains', value: String(humans), inline: true },
+          { name: 'Bots', value: String(bots), inline: true },
+          { name: 'En ligne', value: String(online), inline: true },
+          { name: 'Inactifs', value: String(idle), inline: true },
+          { name: 'Ne pas déranger', value: String(dnd), inline: true },
+          { name: 'Salons', value: String(guild.channels.cache.size), inline: true },
+          { name: 'Rôles', value: String(guild.roles.cache.size), inline: true },
+        ],
+      })],
+      flags: MessageFlags.Ephemeral,
+    });
   },
 };
