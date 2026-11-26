@@ -51,6 +51,7 @@ export const LOG_DEFAULTS = {
   statusrole: {
     grant: true,
     revoke: true,
+    issue: true,
   },
   voice: {
     memberCountConnect: true,

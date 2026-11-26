@@ -131,6 +131,15 @@ async function main() {
     notes.push(`memberCountChannelId channel_types = ${channelSelect.channel_types.join(',')}`);
   }
 
+  const trapSelect = renderer.buildConfigEditor('antiraid', 'raidTrapChannelId')
+    .components[0].components[0].toJSON();
+  if (!Array.isArray(trapSelect.channel_types) || trapSelect.channel_types.includes(2)
+      || !trapSelect.channel_types.includes(0)) {
+    fail(`raidTrapChannelId: sélecteur texte manquant (${JSON.stringify(trapSelect.channel_types)})`);
+  } else {
+    notes.push(`raidTrapChannelId channel_types = ${trapSelect.channel_types.join(',')}`);
+  }
+
   const customIds = new Set();
   for (const category of registry.CONFIG_CATEGORIES) {
     for (const payload of [

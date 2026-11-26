@@ -14,7 +14,7 @@ import { handleButton } from './handlers/buttons.js';
 import { handleSelect } from './handlers/selects.js';
 import { handleModal } from './handlers/modals.js';
 import { startStatusRoleService } from './services/statusRole.js';
-import { startRaidTrapService } from './services/raidtrap.js';
+import { handleRaidTrap } from './services/raidtrap.js';
 import { startMemberCountService } from './services/membercount.js';
 import { handleAutomod } from './services/automod.js';
 import { handleNewAccountLink, handleSecurityJoin } from './services/security.js';
@@ -45,7 +45,6 @@ function startServices() {
   // Chaque service est idempotent et lit la configuration à chaque exécution :
   // les modifications de /config prennent effet sans redémarrage.
   startStatusRoleService(client);
-  startRaidTrapService(client);
   startMemberCountService(client).catch((err) => {
     console.error(`[alln-utils] démarrage compteur membres: ${err.stack ?? err.message}`);
   });
@@ -127,6 +126,7 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     const securityHandled = await handleNewAccountLink(client, message);
     if (securityHandled || message.deleted) return;
+    if (await handleRaidTrap(client, message)) return;
     await handleAutomod(client, message);
   } catch (err) {
     console.error(`[alln-utils] messageCreate ${message.id}: ${err.stack ?? err.message}`);

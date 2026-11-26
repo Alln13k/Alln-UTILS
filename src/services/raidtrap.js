@@ -1,61 +1,66 @@
-import { Events, PermissionFlagsBits } from 'discord.js';
 import { getConfig } from '../config.js';
 import { log } from '../logger.js';
 
-let trapHandler = null;
+// Code d'origine : le piège surveille un salon TEXTE. Tout message d'un membre
+// non whitelisté déclenche le bannissement et la purge de ses messages (24 h).
+export async function purgeUserMessages(guild, userId, exceptChannelId) {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  let removed = 0;
 
-async function onVoiceStateUpdate(client, oldState, newState) {
-  try {
-    const config = getConfig();
-    if (!config.raidTrapEnabled || !config.raidTrapChannelId) return;
-    if (!newState.channelId || newState.channelId !== config.raidTrapChannelId) return;
-    if (oldState.channelId === newState.channelId) return;
-    if (newState.member?.id === client.user.id || newState.member?.user?.bot) return;
+  for (const channel of guild.channels.cache.values()) {
+    if (channel.id === exceptChannelId) continue;
+    if (!channel.isTextBased() || channel.isThread()) continue;
 
-    const member = newState.member ?? (await newState.guild.members.fetch(newState.userId).catch(() => null));
-    if (!member) return;
-    if (member.permissions?.has(PermissionFlagsBits.Administrator)) return;
+    const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!messages) continue;
 
-    const whitelist = config.raidTrapWhitelist ?? [];
-    if (whitelist.some((roleId) => member.roles.cache.has(roleId))) return;
-    if (!member.kickable) {
-      await log(client, 'security', 'raidTrapTrigger', {
-        guild: newState.guild,
-        title: 'Piège à raid — kick impossible',
-        fields: [
-          { name: 'Membre', value: `<@${member.id}>`, inline: true },
-          { name: 'Salon', value: `<#${newState.channelId}>`, inline: true },
-          { name: 'Raison', value: 'Permissions insuffisantes pour kick', inline: false },
-        ],
-      }).catch(() => null);
-      return;
-    }
+    const targets = messages.filter((m) => m.author?.id === userId && m.createdTimestamp > cutoff);
+    if (targets.size === 0) continue;
 
-    const reason = String(config.raidTrapBanReason ?? 'raid trap').slice(0, 512);
-    await member.kick(reason);
-
-    await log(client, 'security', 'raidTrapTrigger', {
-      guild: newState.guild,
-      title: 'Piège à raid — kick',
-      fields: [
-        { name: 'Membre', value: `<@${member.id}> (${member.user.tag})`, inline: true },
-        { name: 'Salon piège', value: `<#${newState.channelId}>`, inline: true },
-        { name: 'Raison', value: reason, inline: false },
-      ],
-    });
-  } catch (err) {
-    console.error(`[alln-utils] raidtrap: ${err.stack ?? err.message}`);
+    const deleted = await channel.bulkDelete(targets, true).catch(() => null);
+    if (deleted) removed += deleted.size;
   }
+
+  return removed;
 }
 
-export function startRaidTrapService(client) {
-  stopRaidTrapService(client);
-  trapHandler = (oldState, newState) => onVoiceStateUpdate(client, oldState, newState);
-  client.on(Events.VoiceStateUpdate, trapHandler);
+export async function handleRaidTrap(client, message) {
+  const config = getConfig();
+  if (!config.raidTrapEnabled || !config.raidTrapChannelId) return false;
+  if (message.channelId !== config.raidTrapChannelId) return false;
+  if (!message.guild || message.author.bot) return false;
+
+  const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+  const whitelist = config.raidTrapWhitelist ?? [];
+  if (member && whitelist.some((roleId) => member.roles.cache.has(roleId))) {
+    return false;
+  }
+
+  await message.delete().catch(() => null);
+
+  let banStatus = 'ok';
+  try {
+    if (member && !member.bannable) throw new Error('membre non bannissable');
+    await message.guild.members.ban(message.author.id, { reason: config.raidTrapBanReason });
+  } catch (err) {
+    banStatus = `échec: ${err.message}`;
+  }
+
+  const purged = member ? await purgeUserMessages(message.guild, message.author.id, message.channelId) : 0;
+
+  await log(client, 'security', 'raidTrapTrigger', {
+    guild: message.guild,
+    description: 'Un membre a écrit dans le salon piège.',
+    fields: [
+      { name: 'Utilisateur', value: `<@${message.author.id}> (${message.author.tag})`, inline: true },
+      { name: 'ID', value: message.author.id, inline: true },
+      { name: 'Nom du compte', value: message.author.username, inline: true },
+      { name: 'Ban', value: banStatus, inline: true },
+      { name: 'Messages purgés (24h)', value: String(purged), inline: true },
+      { name: 'Contenu', value: (message.content || '[embed/pièce jointe]').slice(0, 1000), inline: false },
+      { name: 'Horodatage', value: `<t:${Math.floor(message.createdTimestamp / 1000)}:F>`, inline: false },
+    ],
+  });
+
   return true;
-}
-
-export function stopRaidTrapService(client) {
-  if (client && trapHandler) client.off(Events.VoiceStateUpdate, trapHandler);
-  trapHandler = null;
 }

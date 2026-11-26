@@ -1,4 +1,4 @@
-import { Events, PermissionFlagsBits } from 'discord.js';
+import { Events } from 'discord.js';
 import { getConfig, onConfigChange } from '../config.js';
 import { log } from '../logger.js';
 
@@ -14,6 +14,8 @@ const WATCHED_KEYS = [
 
 const COOLDOWN_MS = 10_000;
 const memberCooldowns = new Map();
+const reportedIssues = new Set();
+let lastError = null;
 let presenceHandler = null;
 let sweepTimer = null;
 let offConfigChange = null;
@@ -52,8 +54,68 @@ function matches(state, config) {
 
 function isEligible(member, config) {
   if (!member?.id || !member.guild || member.user?.bot) return false;
-  if (member.permissions?.has(PermissionFlagsBits.Administrator)) return false;
+  // Seules les exemptions explicites excluent un membre. Les administrateurs
+  // et le propriétaire peuvent recevoir le rôle s'ils ont le statut voulu.
   if ([...config.exemptRoleIds].some((roleId) => member.roles?.cache?.has(roleId))) return false;
+  return true;
+}
+
+function issueKey(guildId, roleId, issue) {
+  return `${guildId}:${roleId}:${issue}`;
+}
+
+function reportIssue(client, guild, key, title, detail) {
+  if (reportedIssues.has(key)) return;
+  reportedIssues.add(key);
+  lastError = detail;
+  console.error(`[alln-utils] statusRole: ${detail}`);
+  log(client, 'statusrole', 'issue', {
+    guild,
+    title,
+    description: detail,
+  }).catch(() => null);
+}
+
+async function roleIsAssignable(client, guild, roleId) {
+  if (!roleId) return false;
+  const role = guild.roles.cache.get(roleId) ?? (await guild.roles.fetch(roleId).catch(() => null));
+  if (!role) {
+    reportIssue(
+      client,
+      guild,
+      issueKey(guild.id, roleId, 'missing'),
+      'Rôle statut introuvable',
+      `Le rôle <@&${roleId}> n'existe plus sur ${guild.name}.`,
+    );
+    return false;
+  }
+  if (role.id === guild.roles.everyone.id || role.managed) {
+    reportIssue(
+      client,
+      guild,
+      issueKey(guild.id, roleId, 'unassignable'),
+      'Rôle statut non attribuable',
+      `Le rôle <@&${roleId}> ne peut pas être attribué manuellement (@everyone ou rôle de bot).`,
+    );
+    return false;
+  }
+
+  const botMember = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+  const botHighest = botMember?.roles?.highest ?? null;
+  if (!botHighest || role.position >= botHighest.position) {
+    reportIssue(
+      client,
+      guild,
+      issueKey(guild.id, roleId, 'hierarchy'),
+      'Hiérarchie des rôles insuffisante',
+      `Le rôle le plus élevé du bot (${botHighest?.name ?? 'inconnu'}) doit être au-dessus de <@&${roleId}>.`,
+    );
+    return false;
+  }
+
+  reportedIssues.delete(issueKey(guild.id, roleId, 'missing'));
+  reportedIssues.delete(issueKey(guild.id, roleId, 'unassignable'));
+  reportedIssues.delete(issueKey(guild.id, roleId, 'hierarchy'));
   return true;
 }
 
@@ -67,6 +129,8 @@ async function applyRole(client, member, state, config) {
   const has = member.roles.cache.has(config.roleId);
   if (shouldHave === has) return;
 
+  if (shouldHave && !(await roleIsAssignable(client, member.guild, config.roleId))) return;
+
   memberCooldowns.set(member.id, now);
   const action = shouldHave ? 'grant' : 'revoke';
   const reason = shouldHave ? 'Statut personnalisé correspondant' : 'Statut personnalisé non correspondant';
@@ -75,6 +139,7 @@ async function applyRole(client, member, state, config) {
     if (shouldHave) await member.roles.add(config.roleId, reason);
     else await member.roles.remove(config.roleId, reason);
 
+    lastError = null;
     if (config.logChanges) {
       await log(client, 'statusrole', action, {
         guild: member.guild,
@@ -87,7 +152,8 @@ async function applyRole(client, member, state, config) {
     }
   } catch (err) {
     memberCooldowns.delete(member.id);
-    console.error(`[alln-utils] statusRole ${action} ${member.id}: ${err.message}`);
+    lastError = `${action} ${member.id}: ${err.message}`;
+    console.error(`[alln-utils] statusRole ${lastError}`);
     await log(client, 'statusrole', action, {
       guild: member.guild,
       title: `Échec ${action === 'grant' ? 'attribution' : 'retrait'} rôle statut`,
@@ -122,28 +188,60 @@ export async function reconcileAll(client, guild) {
   }
 }
 
+export function statusRoleDiagnostics(guild) {
+  const config = settings();
+  const role = config.roleId ? guild.roles.cache.get(config.roleId) : null;
+  const botHighest = guild.members?.me?.roles?.highest ?? null;
+  const canAssign = Boolean(
+    role
+    && role.id !== guild.roles.everyone.id
+    && !role.managed
+    && botHighest
+    && role.position < botHighest.position,
+  );
+  const cache = guild.members?.cache;
+  const members = cache ? [...cache.values()] : [];
+  const matching = members.filter(
+    (member) => !member.user?.bot && matches(memberActivity(member), config),
+  ).length;
+
+  return {
+    enabled: config.enabled,
+    text: config.text,
+    mode: config.matchMode,
+    roleId: config.roleId,
+    roleName: role?.name ?? null,
+    roleExists: Boolean(role),
+    canAssign,
+    botHighestName: botHighest?.name ?? null,
+    matching,
+    lastError,
+  };
+}
+
 export function startStatusRoleService(client) {
   stopStatusRoleService(client);
 
   offConfigChange = onConfigChange((patch) => {
     if (WATCHED_KEYS.some((key) => key in patch)) {
+      reportedIssues.clear();
+      lastError = null;
       queueMicrotask(() => { startStatusRoleService(client); });
     }
   });
 
-  presenceHandler = async (oldPresence, newPresence) => {
+  // On réconcilie à chaque changement de présence, même si l'état de
+  // correspondance est identique : cela répare aussi un rôle retiré à la main.
+  presenceHandler = async (_oldPresence, newPresence) => {
     try {
       const config = settings();
       if (!config.enabled || !config.text || !config.roleId) return;
       if (!newPresence?.guild) return;
 
-      const oldState = customStateFromPresence(oldPresence);
-      const newState = customStateFromPresence(newPresence);
-      if (matches(oldState, config) === matches(newState, config)) return;
-
+      const state = customStateFromPresence(newPresence);
       const member = newPresence.member
         ?? (await newPresence.guild.members.fetch(newPresence.userId).catch(() => null));
-      if (member) await applyRole(client, member, newState, config);
+      if (member) await applyRole(client, member, state, config);
     } catch (err) {
       console.error(`[alln-utils] statusRole presenceUpdate: ${err.stack ?? err.message}`);
     }
@@ -156,6 +254,11 @@ export function startStatusRoleService(client) {
       reconcileAll(client, guild).catch((err) => console.error(`[alln-utils] statusRole sweep: ${err.message}`));
     }
   }, intervalMs);
+
+  // Premier passage immédiat : les présences sont déjà en cache au ready.
+  for (const guild of client.guilds.cache.values()) {
+    reconcileAll(client, guild).catch(() => null);
+  }
 
   return true;
 }

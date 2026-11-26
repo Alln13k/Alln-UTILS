@@ -62,7 +62,7 @@ export const CONFIG_CATEGORIES = [
     id: 'antiraid',
     label: 'Anti-Raid',
     emoji: '🚨',
-    description: 'Piège vocal et verrouillage raid mode.',
+    description: 'Piège texte et verrouillage raid mode.',
     keys: [
       'raidTrapChannelId',
       'raidTrapEnabled',
@@ -110,7 +110,7 @@ export const CHANNEL_TYPES = {
   ticketCategoryId: [ChannelType.GuildCategory],
   ticketLogChannelId: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
   ticketTranscriptChannelId: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
-  raidTrapChannelId: [ChannelType.GuildVoice],
+  raidTrapChannelId: [ChannelType.GuildText],
   raidModeLockedChannels: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
   memberCountChannelId: [ChannelType.GuildVoice],
 };

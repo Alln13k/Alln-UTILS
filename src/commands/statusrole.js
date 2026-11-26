@@ -7,7 +7,7 @@ import { buildEmbed, buildError } from '../embeds.js';
 import { log } from '../logger.js';
 import { requireAdmin } from '../permissions.js';
 import { setConfigValue, getConfig } from '../config.js';
-import { reconcileAll } from '../services/statusRole.js';
+import { reconcileAll, statusRoleDiagnostics } from '../services/statusRole.js';
 
 export default {
   category: 'Configuration',
@@ -103,20 +103,37 @@ export default {
     }
 
     if (sub === 'status') {
-      const holders = interaction.guild.members.cache.filter((m) => !m.user.bot && m.roles.cache.has(config.statusRoleId ?? '')).size;
+      const diag = statusRoleDiagnostics(interaction.guild);
+      const holders = interaction.guild.members.cache.filter(
+        (m) => !m.user.bot && m.roles.cache.has(config.statusRoleId ?? ''),
+      ).size;
+
+      let roleState = '(aucun rôle configuré)';
+      if (diag.roleId) {
+        const reasons = [];
+        if (!diag.roleExists) reasons.push('introuvable');
+        if (!diag.canAssign) reasons.push('bot trop bas ou rôle non attribuable');
+        roleState = reasons.length
+          ? `<@&${diag.roleId}> — ⚠️ ${reasons.join(', ')}`
+          : `<@&${diag.roleId}> — ✅ attribuable`;
+      }
+
+      const fields = [
+        { name: 'Activé', value: diag.enabled ? 'Oui' : 'Non', inline: true },
+        { name: 'Texte', value: diag.text || '(aucun)', inline: true },
+        { name: 'Mode', value: diag.mode, inline: true },
+        { name: 'Balayage', value: `${config.statusRoleSweepSeconds ?? 2}s`, inline: true },
+        { name: 'Rôle', value: roleState.slice(0, 1024), inline: false },
+        { name: 'Rôle le plus haut du bot', value: diag.botHighestName ?? '(inconnu)', inline: true },
+        { name: 'Statuts correspondants (cache)', value: String(diag.matching), inline: true },
+        { name: 'Porteurs actuels', value: String(holders), inline: true },
+      ];
+      if (diag.lastError) {
+        fields.push({ name: 'Dernière erreur', value: String(diag.lastError).slice(0, 1024), inline: false });
+      }
+
       return interaction.reply({
-        embeds: [buildEmbed({
-          dark: true,
-          title: 'StatusRole — État',
-          fields: [
-            { name: 'Activé', value: config.statusRoleEnabled ? 'Oui' : 'Non', inline: true },
-            { name: 'Texte', value: config.statusRoleText ?? '(aucun)', inline: true },
-            { name: 'Rôle', value: config.statusRoleId ? `<@&${config.statusRoleId}>` : '(aucun)', inline: true },
-            { name: 'Mode', value: config.statusRoleMatchMode ?? 'contains', inline: true },
-            { name: 'Balayage', value: `${config.statusRoleSweepSeconds ?? 2}s`, inline: true },
-            { name: 'Porteurs actuels', value: String(holders), inline: true },
-          ],
-        })],
+        embeds: [buildEmbed({ dark: true, title: 'StatusRole — État', fields })],
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -124,7 +141,15 @@ export default {
     if (sub === 'refresh') {
       const guild = interaction.guild;
       await reconcileAll(interaction.client, guild);
-      return interaction.reply({ embeds: [buildEmbed({ dark: true, title: 'StatusRole', description: 'Balayage forcé terminé.' })], flags: MessageFlags.Ephemeral });
+      const diag = statusRoleDiagnostics(guild);
+      return interaction.reply({
+        embeds: [buildEmbed({
+          dark: true,
+          title: 'StatusRole',
+          description: `Balayage terminé. ${diag.matching} statut(s) correspondant(s) en cache.`,
+        })],
+        flags: MessageFlags.Ephemeral,
+      });
     }
   },
 };
