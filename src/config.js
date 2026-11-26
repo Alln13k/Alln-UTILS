@@ -20,6 +20,13 @@ export const CONFIG_KEYS = {
   logChannelOverrides: { type: 'json', default: {}, label: 'Logs — salons par événement' },
 
   welcomeChannelId: { type: 'channel', default: null, label: 'Salon de bienvenue' },
+  welcomeEnabled: { type: 'bool', default: false, label: 'Bienvenue — activer les messages' },
+  welcomeMessage: {
+    type: 'string',
+    default: 'Bienvenue {mention} sur {guild} ! Nous sommes maintenant {count} membres.',
+    label: 'Message de bienvenue (texte brut)',
+    maxLength: 1000,
+  },
   suggestionsChannelId: { type: 'channel', default: null, label: 'Salon des suggestions' },
 
   autoroleId: { type: 'role', default: null, label: 'Rôle automatique' },

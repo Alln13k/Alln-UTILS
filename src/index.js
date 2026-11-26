@@ -18,6 +18,7 @@ import { handleRaidTrap } from './services/raidtrap.js';
 import { startMemberCountService } from './services/membercount.js';
 import { handleAutomod } from './services/automod.js';
 import { handleNewAccountLink, handleSecurityJoin } from './services/security.js';
+import { startWelcomeService } from './services/welcome.js';
 import { applyUnverifiedRole } from './services/rulesGate.js';
 
 const client = new Client({
@@ -45,6 +46,7 @@ function startServices() {
   // Chaque service est idempotent et lit la configuration à chaque exécution :
   // les modifications de /config prennent effet sans redémarrage.
   startStatusRoleService(client);
+  startWelcomeService(client);
   startMemberCountService(client).catch((err) => {
     console.error(`[alln-utils] démarrage compteur membres: ${err.stack ?? err.message}`);
   });

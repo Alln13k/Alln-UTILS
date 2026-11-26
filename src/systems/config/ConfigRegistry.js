@@ -20,8 +20,8 @@ export const CONFIG_CATEGORIES = [
     id: 'notifications',
     label: 'Notifications',
     emoji: '🔔',
-    description: 'Bienvenue et suggestions.',
-    keys: ['welcomeChannelId', 'suggestionsChannelId'],
+    description: 'Bienvenue en texte brut et suggestions.',
+    keys: ['welcomeChannelId', 'welcomeEnabled', 'welcomeMessage', 'suggestionsChannelId'],
   },
   {
     id: 'roles',
@@ -238,6 +238,9 @@ export function constraintsText(key) {
     const min = meta.min ?? 0;
     const max = meta.max ?? '∞';
     return `Entier entre \`${min}\` et \`${max}\`.`;
+  }
+  if (key === 'welcomeMessage') {
+    return 'Texte brut, sans embed. Variables : `{mention}`, `{user}`, `{username}`, `{guild}`, `{count}`.';
   }
   if (meta.type === 'string') return `Texte, maximum \`${meta.maxLength ?? 1000}\` caractères.`;
   if (meta.type === 'hex') return 'Couleur hexadécimale, par exemple `#000000`.';

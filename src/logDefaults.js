@@ -1,5 +1,6 @@
 export const LOG_DEFAULTS = {
   config: { changed: true },
+  welcome: { sent: true },
   admin: { wipe: true, backup: true, purgeLogs: true },
   security: {
     raidTrapTrigger: true,
@@ -74,6 +75,7 @@ export const LOG_DEFAULTS = {
 
 export const LOG_TITLES = {
   'config.changed': 'Configuration modifiée',
+  'welcome.sent': 'Message de bienvenue envoyé',
   'admin.wipe': 'Wipe',
   'admin.backup': 'Backup',
   'admin.purgeLogs': 'Purge logs',

@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "deploy": "node deploy-commands.js",
-    "check": "node scripts/check.js && node scripts/check-components.mjs && node scripts/check-interactions.mjs && node scripts/check-statusrole.mjs && node scripts/check-raidtrap.mjs"
+    "check": "node scripts/check.js && node scripts/check-components.mjs && node scripts/check-interactions.mjs && node scripts/check-statusrole.mjs && node scripts/check-raidtrap.mjs && node scripts/check-welcome.mjs"
   },
   "engines": {
     "node": ">=20.0.0"
